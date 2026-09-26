@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plot Market</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- The map is the page. Everything else floats over it as HUD panels. -->
+<div id="live-map" class="live-map"></div>
+
+<header class="hud hud-top">
+  <div class="brand">
+    <h1>Plot Market</h1>
+    <p><span class="live-dot"></span><span id="live-status">Loading map...</span></p>
+  </div>
+  <div class="header-right">
+    <label class="you">You are: <select id="seller-select"></select></label>
+    <div class="date">Today: <span id="today"></span></div>
+    <button id="skip-month" class="ghost" title="Demo: advance time by one month">Skip 1 month</button>
+    <button id="nominate" class="ghost">Nominate a store</button>
+    <button id="my-nominations" class="ghost">My nominations</button>
+    <button id="ask-guide" class="btn small">Ask the Guide</button>
+  </div>
+</header>
+
+<div id="live-legend" class="hud hud-legend"></div>
+
+<div class="hud hud-actions">
+  <button id="live-locate" class="ghost" title="Centre the map on your position">Centre on me</button>
+  <button id="fake-location" class="ghost" title="Enable demo location controls">Fake my location</button>
+  <button id="live-anchor" class="ghost" title="Lay the streets out around where you are now">Move plots here</button>
+</div>
+
+<div id="go-card" class="hud hud-go hidden" aria-live="polite"></div>
+
+<div id="pin-drop" class="hud hud-pindrop hidden">
+  <span>Drag or tap the map to mark the storefront</span>
+  <button id="pin-drop-use" class="btn small">Use this spot</button>
+  <button id="pin-drop-cancel" class="ghost">Cancel</button>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <button class="close" id="modal-close" aria-label="Close">&times;</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- AI Guide -->
+<div id="avatar" class="avatar hidden"><span class="avatar-sprite">🧭</span><div id="bubble" class="bubble hidden"></div></div>
+
+<aside id="guide" class="guide-panel hidden">
+  <div class="guide-head">
+    <h2>Shopping Guide</h2>
+    <span id="guide-status" class="muted small"></span>
+    <button class="close" id="guide-close" aria-label="Close">&times;</button>
+  </div>
+  <div id="guide-log" class="guide-log"></div>
+  <div id="guide-summary" class="guide-summary hidden"></div>
+  <form id="guide-form" class="guide-form">
+    <input id="guide-input" type="text" placeholder="e.g. vintage watch under £50, something my dad would like" autocomplete="off">
+    <button class="btn" id="guide-send" type="submit">Go</button>
+  </form>
+  <div class="guide-foot muted small">
+    <label><input type="checkbox" id="guide-fast" checked> Fast walk</label>
+    <button type="button" class="ghost" id="guide-reset">New search</button>
+  </div>
+</aside>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script src="guide.js"></script>
+<script src="livemap.js"></script>
+</body>
+</html>

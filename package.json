@@ -1,0 +1,14 @@
+{
+  "name": "plot-market",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shoppers nominate real stores onto a live map; owners claim them; a Grok-powered guide walks the streets for you.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
