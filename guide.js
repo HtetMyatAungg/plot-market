@@ -75,15 +75,27 @@ function log(text, kind = "tool") {
 
 function showSummary(summary) {
   guideHistory.push({ role: "assistant", content: summary });
+  const seen = new Set(), stops = [];
+  if (LiveMap.userPosition()) for (const match of matches) {
+    if (seen.has(match.plot_id)) continue;
+    seen.add(match.plot_id);
+    const position = LiveMap.plotPosition(match.plot_id);
+    if (position) stops.push(position);
+    if (stops.length === 11) break;
+  }
   summaryEl.classList.remove("hidden");
   summaryEl.innerHTML = `<h3>Route summary</h3>
     ${matches.length ? `<ol>${matches.map((m) => `<li><button class="link" data-plot="${esc(m.plot_id)}"><b>${esc(guideText(m.shop))}</b> - ${esc(guideText(m.product))} <span class="muted">£${m.price}</span></button><div class="muted small">${esc(guideText(m.reason))}</div></li>`).join("")}</ol>` : `<p class="muted">No matches on this walk.</p>`}
     ${skipped.length ? `<p class="muted small">Skipped: ${skipped.map((s) => `${s.street} (${s.reason})`).join("; ")}</p>` : ""}
+    ${stops.length ? `<button class="btn small" id="guide-route">Walk the route (${stops.length} ${stops.length === 1 ? "stop" : "stops"})</button>` : ""}
     <p class="muted small">Refine below, e.g. "cheaper" or "only thrift".</p>`;
   summaryEl.querySelectorAll("[data-plot]").forEach((b) => (b.onclick = () => {
     LiveMap.focusPlot(b.dataset.plot);
     if (b.dataset.plot.startsWith("pin:")) openPin(b.dataset.plot.slice(4)); else openPlot(b.dataset.plot);
   }));
+  summaryEl.querySelector("#guide-route")?.addEventListener("click", () => {
+    routeThrough([LiveMap.userPosition(), ...stops], `Guide route · ${stops.length} ${stops.length === 1 ? "stop" : "stops"}`, { destinationIsMarker: true });
+  });
   $("#guide-input").placeholder = "Refine: cheaper, only thrift, under £30...";
   $("#guide-send").disabled = false;
 }

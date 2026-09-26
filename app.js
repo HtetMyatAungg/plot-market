@@ -296,6 +296,72 @@ function registerUserMoves() {
   LiveMap.onUserMove(onUserMove);
 }
 
+let currentRoutePoints = [];
+function formatRouteDistance(distance) {
+  return distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1).replace(/\.0$/, "")} km`;
+}
+
+function clearRouteCard() {
+  currentRoutePoints = [];
+  $("#route-card")?.classList.add("hidden");
+  document.body.classList.remove("route-open");
+}
+
+window.onLiveRouteCleared = clearRouteCard;
+
+async function routeResponse(points) {
+  try {
+    const query = points.map((point) => `${point.lng},${point.lat}`).join(";");
+    const response = await fetch(`/api/route?points=${encodeURIComponent(query)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(data.path) || data.path.length < 2) throw new Error(data.error || "Route unavailable");
+    return { ...data, direct: false };
+  } catch {
+    const distance = points.slice(1).reduce((sum, point, i) => sum + distanceMetres(points[i], point), 0);
+    return { path: points, distance_m: distance, duration_s: distance / 1.4, direct: true };
+  }
+}
+
+async function routeThrough(points, label, options = {}) {
+  const from = currentUserPosition || (typeof LiveMap !== "undefined" ? LiveMap.userPosition() : null);
+  if (!from) { toast("Turn on location (or Fake my location) first", true); return null; }
+  let stops = Array.isArray(points) ? [...points] : [];
+  if (stops[0] && distanceMetres(stops[0], from) < 1) stops.shift();
+  const routePoints = [from, ...stops].slice(0, 12);
+  if (routePoints.length < 2) { toast("Choose a destination first", true); return null; }
+  LiveMap.clearRoute();
+  const result = await routeResponse(routePoints);
+  const path = [...result.path];
+  if (distanceMetres(path[0], routePoints[0]) > 1) path.unshift(routePoints[0]); else path[0] = routePoints[0];
+  if (distanceMetres(path.at(-1), routePoints.at(-1)) > 1) path.push(routePoints.at(-1)); else path[path.length - 1] = routePoints.at(-1);
+  result.path = path;
+  LiveMap.showRoute(path, { destinationIsMarker: options.destinationIsMarker, label });
+  currentRoutePoints = path;
+  const distance = formatRouteDistance(result.distance_m);
+  const minutes = Math.ceil(result.duration_s / 60);
+  $("#route-card").innerHTML = `<div class="route-main"><span>${result.direct ? "Direct line · " : "🚶 "}${esc(label)} · ${distance} · ${minutes} min</span></div>
+    ${LiveMap.isFakeLocation() ? `<button class="btn small route-walk" id="route-walk" type="button">Walk there</button>` : ""}<button class="ghost route-clear" id="route-clear" type="button" aria-label="Clear route">×</button>`;
+  $("#route-card").classList.remove("hidden");
+  document.body.classList.add("route-open");
+  $("#route-clear").onclick = () => LiveMap.clearRoute();
+  $("#route-walk")?.addEventListener("click", async () => {
+    const arrived = await LiveMap.followRoute(currentRoutePoints, 1.4, 12_000);
+    if (arrived) toast("You reached your destination");
+  });
+  return result;
+}
+
+function routeTo(target, { label = "Walk here", destinationIsMarker = false } = {}) {
+  if (!target || !Number.isFinite(target.lat) || !Number.isFinite(target.lng)) { toast("Couldn't locate that destination.", true); return Promise.resolve(null); }
+  return routeThrough([target], label, { destinationIsMarker });
+}
+
+function walkHereButton(position, id = "walk-here") {
+  const from = currentUserPosition || (typeof LiveMap !== "undefined" ? LiveMap.userPosition() : null);
+  const preview = position && from ? ` · ${formatRouteDistance(distanceMetres(from, position))}` : "";
+  return `<button class="btn small walk-here" id="${id}" type="button">Walk here${preview}</button>`;
+}
+
 function guidePlots() {
   const snapshot = plots.map(({ id, streetId, position, status, sellerId }) => ({ id, streetId, position, status, sellerId }));
   const byStreet = new Map();
@@ -420,18 +486,22 @@ function openPlot(plotId) {
   const p = plotById(plotId);
   const s = streetById(p.streetId);
   const title = `${esc(s.name)} &middot; Plot ${p.position + 1}`;
-  let html, importOwnerKey = null;
+  let html, importOwnerKey = null, walkTarget = null, walkLabel = "Walk here";
   if (p.status === "occupied") {
     const pin = nominations.pins.find((item) => item.id === p.nominationId);
+    walkTarget = pin ? { lat: pin.lat, lng: pin.lng } : LiveMap.plotPosition(p.id);
+    walkLabel = pin ? `Walk here · ${pin.name}` : "Walk here · real store";
     html = `<h2>${title}</h2>
       <p class="warn">A real store is already here. Real shops' spots are never for rent.</p>
       ${pin ? `<p class="muted">${esc(pin.category)} · ${esc(pin.streetType)}</p>` : ""}
-      <button class="btn" id="view-nominated-store">View ${esc(pin?.name || "store")}</button>`;
+      <button class="btn" id="view-nominated-store">View ${esc(pin?.name || "store")}</button>${walkHereButton(walkTarget)}`;
   } else if (p.status === "taken") {
     const seller = sellerById(p.sellerId);
     const mine = seller.id === currentSellerId;
     const imported = catalogues[seller.id];
     const products = productsForSeller(seller);
+    walkTarget = LiveMap.plotPosition(p.id);
+    walkLabel = `Walk here · ${seller.name}`;
     if (mine) importOwnerKey = seller.id;
     html = `
       <div class="shop-head" style="--accent:${esc(seller.color)}">
@@ -439,6 +509,7 @@ function openPlot(plotId) {
         <div><h2>${esc(seller.name)}</h2><p class="muted">${title}</p><p>${esc(seller.description)}</p></div>
       </div>
       ${renderProductGrid(products)}
+      ${walkHereButton(walkTarget)}
       ${imported ? `<p class="muted small">Catalogue from <b>${esc(imported.store?.name || seller.name)}</b> · ${Number(imported.visible ?? imported.products.length)} products · updated ${timeAgo(imported.lastSynced)}</p>` : ""}
       <p class="muted small">Rent paid until <b>${fmt(p.rentPaidUntil)}</b>${p.rentPaidUntil <= addMonths(today, 1) ? " &middot; due soon" : ""}</p>
       ${mine ? `<button class="btn" id="pay-rent">Pay £${RENT_GBP} rent (+1 month)</button>${renderImportSection(seller.id)}` : ""}`;
@@ -483,6 +554,7 @@ function openPlot(plotId) {
   });
   $("#pay-rent")?.addEventListener("click", () => { toast(payRent(p.id)); render(); openPlot(p.id); });
   $("#view-nominated-store")?.addEventListener("click", () => openPin(p.nominationId));
+  $("#walk-here")?.addEventListener("click", () => { closeModal(); routeTo(walkTarget, { label: walkLabel, destinationIsMarker: true }); });
   $("#place-bid")?.addEventListener("click", () => {
     const r = placeBid(p.id, currentSellerId, Number($("#bid-amount").value));
     toast(r.msg, !r.ok); if (r.ok) { render(); openPlot(p.id); }
@@ -579,7 +651,8 @@ function openPin(id) {
     <h2>${esc(pin.name)}</h2><p class="muted">${esc(pin.category)} · ${esc(pin.streetType)}</p>
     ${pin.note ? `<blockquote class="nomination-note">“${esc(pin.note)}”<span>— nominated by a shopper</span></blockquote>` : ""}
     <p><span class="status-chip ${claimed ? "claimed" : "approved"}">${claimed ? "Verified owner" : "Not yet claimed by owner"}</span></p>
-    ${pin.website ? `<p><a class="nomination-link" href="${esc(pin.website)}" target="_blank" rel="noopener">Visit website</a></p>` : ""}`;
+    ${pin.website ? `<p><a class="nomination-link" href="${esc(pin.website)}" target="_blank" rel="noopener">Visit website</a></p>` : ""}
+    ${walkHereButton({ lat: pin.lat, lng: pin.lng }, "pin-walk-here")}`;
   if (claimed) {
     html += `${renderProductGrid(imported?.products || [])}
       ${imported ? `<p class="muted small">Catalogue from <b>${esc(imported.store?.name || pin.name)}</b> · ${Number(imported.visible ?? imported.products.length)} products · updated ${timeAgo(imported.lastSynced)}</p>` : `<p class="muted small">No products have been published yet.</p>`}
@@ -594,6 +667,10 @@ function openPin(id) {
 
   $("#modal-body").innerHTML = html;
   $("#modal").classList.remove("hidden");
+  $("#pin-walk-here")?.addEventListener("click", () => {
+    closeModal();
+    routeTo({ lat: pin.lat, lng: pin.lng }, { label: `Walk here · ${pin.name}`, destinationIsMarker: true });
+  });
   if (owner && claim?.status === "active") wireImportSection(ownerKey, () => openPin(id));
   $("#claim-start-toggle")?.addEventListener("click", () => $("#claim-start-panel").classList.toggle("hidden"));
   $("#claim-start")?.addEventListener("click", async (event) => {

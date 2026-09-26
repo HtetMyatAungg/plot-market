@@ -213,6 +213,14 @@ img.p-img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px
 .go-code { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
 .go-code code { color: #bae6fd; font-size: 22px; font-weight: 700; letter-spacing: 3px; }
 .go-code small { color: var(--muted); }
+.hud-route { left: 50%; bottom: 94px; z-index: 8; width: min(500px, calc(100vw - 28px)); min-height: 48px; padding: 9px 42px 9px 14px; transform: translate(-50%, 16px); display: flex; align-items: center; gap: 8px; opacity: 0; visibility: hidden; pointer-events: none; transition: transform .25s ease, opacity .25s ease, visibility .25s; }
+.hud-route:not(.hidden) { transform: translate(-50%, 0); opacity: 1; visibility: visible; pointer-events: auto; }
+.route-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 13px; }
+.route-direct, .route-meta { color: var(--muted); font-size: 12px; }
+.route-walk { display: none; flex: none; }
+body.fake-location .route-walk { display: inline-block; }
+.route-clear { position: absolute; top: 8px; right: 8px; padding: 3px 8px; font-size: 16px; }
+body.route-open .hud-go { bottom: 160px; }
 
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -295,6 +303,8 @@ img.p-img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px
   .hud-actions .ghost { padding: 6px 8px; font-size: 12px; }
   .hud-pindrop { width: calc(100vw - 24px); justify-content: center; gap: 6px; white-space: normal; }
   .hud-go { bottom: 88px; }
+  .hud-route { width: calc(100vw - 24px); flex-wrap: wrap; }
+  body.route-open .hud-go { bottom: 160px; }
   .go-content { grid-template-columns: 48px minmax(0,1fr); gap: 8px; }
   .go-photo { width: 48px; height: 48px; }
   .go-code code { font-size: 18px; }

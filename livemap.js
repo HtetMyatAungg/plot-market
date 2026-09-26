@@ -391,6 +391,7 @@ const LiveMap = (() => {
   function toggleFakeLocation() {
     if (!map) return;
     fakeLocation = !fakeLocation;
+    document.body.classList.toggle("fake-location", fakeLocation);
     const button = $("#fake-location");
     if (fakeLocation) {
       if (!currentPosition) setUser(map.getCenter()?.toJSON?.() || FALLBACK, 0);

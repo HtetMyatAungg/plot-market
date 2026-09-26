@@ -59,6 +59,10 @@ A seller selects their identity in the demo and starts a claim on an approved pi
 
 An active claim includes £10/month demo rent, an optional 80-character in-person deal, and a Shopify catalogue stored under `pin:<nomination-id>`. If rent lapses, the pin becomes unclaimed, its deal and catalogue are removed, and it is never offered for rent. The guide visits pins in street order; it gives unclaimed pins a short notice without inventing product details and can search a claimed pin's published products.
 
+## Walking routes
+
+Plot and store modals can request a foot route through `/api/route`; the server uses OSRM's foot router with the public OSRM router as fallback and caches successful routes for 10 minutes. These public routers ask for light use, so avoid high-volume polling. If both are unavailable, the client displays a direct-line estimate. **Walk there** follows the route only in Fake my location mode; the guide can also build a multi-stop route through its matches.
+
 ## GO mechanic
 
 When a shopper comes within 30 m of a claimed store with an in-person deal, a proximity card offers **Unlock deal**. The server independently checks a 60 m radius for GPS tolerance and issues one reusable `PM-XXXX-XXXX` code per shopper and pin to show at the till; the codes map is never returned to clients. Use **Fake my location** to drag the shopper marker or tap a map destination and simulate a straight-line walk (about 1.4 m/s, capped at 3 seconds) without real GPS.
