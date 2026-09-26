@@ -16,6 +16,7 @@ const LiveMap = (() => {
 
   let map, userMarker, accuracyCircle, anchor, avatar, toM, toLL, geoWatchId;
   let fakeLocation = false, fakeMapClick, fakeWalkTimer, pinDropActive = false, currentPosition = null;
+  let routeShapes = [], routeAnimationTimer = null, routePoints = [], routeDestination = null, followTimer = null, followResolver = null;
   const userMoveListeners = new Set();
   let shapes = [];              // everything drawn, rebuilt on refresh
   const houses = new Map();     // plotId -> marker
@@ -288,8 +289,91 @@ const LiveMap = (() => {
 
   function userPosition() { return currentPosition ? { ...currentPosition } : null; }
 
+  function routeDistance(a, b) {
+    const radians = (degrees) => degrees * Math.PI / 180;
+    const dLat = radians(b.lat - a.lat), dLng = radians(b.lng - a.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(radians(a.lat)) * Math.cos(radians(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
+  function cancelFollowRoute() {
+    if (followTimer) clearInterval(followTimer);
+    followTimer = null;
+    if (followResolver) { const resolve = followResolver; followResolver = null; resolve(false); }
+  }
+
+  function clearRoute(notify = true) {
+    if (routeAnimationTimer) clearInterval(routeAnimationTimer);
+    routeAnimationTimer = null;
+    cancelFollowRoute();
+    routeShapes.forEach((shape) => shape.setMap(null));
+    routeShapes = []; routeDestination = null; routePoints = [];
+    if (notify && typeof window.onLiveRouteCleared === "function") window.onLiveRouteCleared();
+  }
+
+  function showRoute(points, meta = {}) {
+    clearRoute();
+    if (!map || !Array.isArray(points) || points.length < 2) return;
+    routePoints = points.map((point) => ({ lat: Number(point.lat), lng: Number(point.lng) }));
+    const casing = new google.maps.Polyline({ map, path: routePoints, clickable: false, zIndex: 2, strokeColor: "#0b0d12", strokeOpacity: 0.9, strokeWeight: 9 });
+    const markerSymbol = { path: "M 0,-1 0,1", strokeColor: "#38bdf8", strokeOpacity: 1, scale: 3 };
+    const route = new google.maps.Polyline({ map, path: routePoints, clickable: false, zIndex: 3, strokeColor: "#38bdf8", strokeOpacity: 1, strokeWeight: 5,
+      icons: [{ icon: markerSymbol, offset: "0px", repeat: "20px" }] });
+    routeShapes.push(casing, route);
+    let offset = 0;
+    routeAnimationTimer = setInterval(() => {
+      offset = (offset + 2) % 20;
+      route.setOptions({ icons: [{ icon: markerSymbol, offset: `${offset}px`, repeat: "20px" }] });
+    }, 60);
+    if (!meta.destinationIsMarker) {
+      routeDestination = new google.maps.Marker({ map, position: routePoints.at(-1), clickable: false, zIndex: 12,
+        title: meta.label || "Destination", icon: { path: google.maps.SymbolPath.CIRCLE, scale: 0 },
+        label: { text: "🏁", fontSize: "18px", className: "map-label" } });
+      routeShapes.push(routeDestination);
+    }
+    const bounds = new google.maps.LatLngBounds();
+    routePoints.forEach((point) => bounds.extend(point));
+    if (currentPosition) bounds.extend(currentPosition);
+    map.fitBounds(bounds, { top: 90, right: 70, bottom: 120, left: 70 });
+    google.maps.event.addListenerOnce(map, "idle", () => map.setZoom(Math.max(15, Math.min(18, map.getZoom() || ZOOM))));
+  }
+
+  function followRoute(points, speedMps = 1.4, maxMs = 12000) {
+    if (!fakeLocation || !currentPosition || !Array.isArray(points) || points.length < 2) return Promise.resolve(false);
+    cancelFollowRoute();
+    const path = points.map((point) => ({ lat: Number(point.lat), lng: Number(point.lng) }));
+    if (routeDistance(currentPosition, path[0]) > 0.5) path.unshift({ ...currentPosition });
+    else path[0] = { ...currentPosition };
+    const lengths = path.slice(1).map((point, i) => routeDistance(path[i], point));
+    const cumulative = [0];
+    lengths.forEach((length) => cumulative.push(cumulative.at(-1) + length));
+    const total = cumulative.at(-1), duration = Math.min(maxMs, total / Math.max(speedMps, 0.1) * 1000);
+    return new Promise((resolve) => {
+      followResolver = resolve;
+      const finish = (arrived) => {
+        if (followTimer) clearInterval(followTimer);
+        followTimer = null; followResolver = null;
+        if (arrived) { setUser(path.at(-1), 0); map.panTo(path.at(-1)); }
+        resolve(arrived);
+      };
+      if (!duration) { finish(true); return; }
+      const started = Date.now();
+      followTimer = setInterval(() => {
+        const progress = Math.min(1, (Date.now() - started) / duration);
+        let targetDistance = total * progress, segment = 0;
+        while (segment < lengths.length - 1 && cumulative[segment + 1] < targetDistance) segment++;
+        const ratio = lengths[segment] ? Math.min(1, (targetDistance - cumulative[segment]) / lengths[segment]) : 1;
+        const from = path[segment], to = path[segment + 1];
+        const point = { lat: from.lat + (to.lat - from.lat) * ratio, lng: from.lng + (to.lng - from.lng) * ratio };
+        setUser(point, 0); map.panTo(point);
+        if (progress >= 1) finish(true);
+      }, 200);
+    });
+  }
+
   function walkTo(target) {
     if (!fakeLocation || !currentPosition) return;
+    cancelFollowRoute();
     clearInterval(fakeWalkTimer);
     const from = { ...currentPosition }, metres = distanceMetres(from, target), duration = Math.min(3000, metres / 1.4 * 1000);
     if (duration <= 0) { setUser(target, 0); return; }
@@ -316,6 +400,7 @@ const LiveMap = (() => {
       button.textContent = "Real location";
       fakeMapClick = map.addListener("click", (event) => { if (!pinDropActive) walkTo(event.latLng.toJSON()); });
     } else {
+      cancelFollowRoute();
       clearInterval(fakeWalkTimer);
       if (fakeMapClick) google.maps.event.removeListener(fakeMapClick);
       fakeMapClick = null;
@@ -327,6 +412,7 @@ const LiveMap = (() => {
 
   async function anchorHere() {
     if (!userMarker) return;
+    clearRoute();
     await loadStreets(userMarker.getPosition().toJSON());
     if (typeof toast === "function") toast("Streets re-laid on the roads around you (demo tenancies reset).");
   }
@@ -407,6 +493,10 @@ const LiveMap = (() => {
 
   const api = {
     refresh,
+    showRoute,
+    clearRoute,
+    followRoute,
+    isFakeLocation: () => fakeLocation,
     avatarToPlot: (id) => { const position = positionFor(id); if (position && avatar) avatar.moveTo(position); },
     avatarToStreet: (id) => { const s = STREETS.find((x) => x.id === id); if (s && avatar) avatar.moveTo(streetStart(s)); },
     avatarHome: () => { if (avatar && anchor) avatar.moveTo(anchor); },

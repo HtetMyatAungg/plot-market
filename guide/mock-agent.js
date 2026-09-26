@@ -1,4 +1,4 @@
-// Deterministic rule-based guide (the default; GUIDE_MODE=llm swaps in Grok).
+// Deterministic rule-based guide (the default; GUIDE_MODE=llm swaps in the OpenAI tool-calling agent).
 // Keyword/synonym matching + price parsing. It goes through exactly the same tools as the LLM agent, so the walk is still real.
 
 const STOP = new Set(["a", "an", "the", "for", "my", "me", "i", "want", "something", "under", "over", "and", "or", "with", "that", "would", "like", "please", "find", "show", "some", "cheap", "cheaper", "only", "just", "in", "of", "to", "is", "it"]);

@@ -1,5 +1,5 @@
 // Plot Market backend: static files, real-road lookup, store import, and the AI Guide agent (SSE).
-// Run: node server.js   (reads .env; guide is the rule-based algorithm unless GUIDE_MODE=llm and XAI_API_KEY is set)
+// Run: node server.js   (reads .env; guide is the rule-based algorithm unless GUIDE_MODE=llm and OPENAI_API_KEY is set)
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -13,13 +13,14 @@ const { verifyOwnership } = require("./nominations/verify.js");
 
 loadDotEnv(path.join(__dirname, ".env"));
 const PORT = Number(process.env.PORT) || 8765;
-const XAI_API_KEY = process.env.XAI_API_KEY;
-const XAI_BASE_URL = process.env.XAI_BASE_URL || "https://api.x.ai/v1";
-const MODEL = process.env.GUIDE_MODEL || "grok-4.6";
+// LLM guide: OpenAI by default. Any OpenAI-compatible endpoint works via LLM_BASE_URL (e.g. xAI: https://api.x.ai/v1 + GUIDE_MODEL=grok-4).
+const LLM_API_KEY = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY;
+const LLM_BASE_URL = process.env.LLM_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+const MODEL = process.env.GUIDE_MODEL || "gpt-4o-mini";
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
-// "algorithm" (default): deterministic rule-based guide. "llm": Grok via xAI (needs XAI_API_KEY).
-const GUIDE_MODE = process.env.GUIDE_MODE === "llm" && XAI_API_KEY ? "llm" : "algorithm";
+// "algorithm" (default): deterministic rule-based guide. "llm": OpenAI tool-calling agent (needs OPENAI_API_KEY).
+const GUIDE_MODE = process.env.GUIDE_MODE === "llm" && LLM_API_KEY ? "llm" : "algorithm";
 const GUIDE_LABEL = GUIDE_MODE === "llm" ? MODEL : "algorithm";
 const MAX_TOOL_CALLS = 400;
 const MAX_TURNS = 30;
@@ -50,8 +51,10 @@ const TOOL_DEFS = [
 function makeTools(plots, STREETS = []) {
   const seller = (id) => SELLERS.find((s) => s.id === id);
   const plot = (id) => plots.find((p) => p.id === id);
-  const state = { enteredStreet: null, lastPosition: -1, viewed: {}, matches: [], skipped: [], calls: 0 };
+  const state = { enteredStreet: null, lastPosition: -1, visited: new Set(), viewed: {}, matches: [], skipped: [], calls: 0 };
   const err = (message) => ({ error: message });
+  // A shop can be peeked into once the avatar has walked up to it on the current street (models often visit a few plots, then look back).
+  const notVisited = (p) => p.streetId !== state.enteredStreet || !state.visited.has(p.id);
 
   const handlers = {
     list_districts: () => DISTRICTS.map((d) => ({ id: d.id, name: d.name,
@@ -59,7 +62,7 @@ function makeTools(plots, STREETS = []) {
     enter_street: ({ street_id }) => {
       const s = STREETS.find((x) => x.id === street_id);
       if (!s) return err(`Unknown street ${street_id}`);
-      state.enteredStreet = s.id; state.lastPosition = -1;
+      state.enteredStreet = s.id; state.lastPosition = -1; state.visited.clear();
       return { street: s.name, plots: plots.filter((p) => p.streetId === s.id).sort((a, b) => a.position - b.position)
         .map((p) => ({ plot_id: p.id, position: p.position + 1, status: p.status,
           shop: p.status === "taken" ? seller(p.sellerId).name : p.status === "pin" ? asData(p.pin.name) : null,
@@ -72,13 +75,13 @@ function makeTools(plots, STREETS = []) {
       if (p.streetId !== state.enteredStreet) return err(`You must call enter_street("${p.streetId}") before visiting this plot.`);
       if (p.status === "pin") {
         if (p.position <= state.lastPosition) return err(`Visit plots in position order. You are already past position ${p.position + 1}.`);
-        state.lastPosition = p.position;
+        state.lastPosition = p.position; state.visited.add(p.id);
         return { plot_id: p.id, shop: asData(p.pin.name), category: asData(p.pin.category), streetType: asData(p.pin.streetType),
           unclaimed: !p.pin.claimed, note: asData(p.pin.note || "") };
       }
       if (p.status !== "taken") return err("This plot is empty or in auction. Skip it without a tool call.");
       if (p.position <= state.lastPosition) return err(`Visit plots in position order. You are already past position ${p.position + 1}.`);
-      state.lastPosition = p.position;
+      state.lastPosition = p.position; state.visited.add(p.id);
       const s = seller(p.sellerId);
       return { plot_id: p.id, shop: asData(s.name), description: asData(s.description), tags: s.tags.map(asData) };
     },
@@ -87,7 +90,7 @@ function makeTools(plots, STREETS = []) {
       if (!p) return err("No shop at this plot.");
       if (p.status === "occupied") return { products: [] };
       if (p.status === "pin") {
-        if (p.streetId !== state.enteredStreet || p.position !== state.lastPosition) return err("You must visit_plot this pin first.");
+        if (notVisited(p)) return err("You must visit_plot this pin first.");
         if (!p.pin.claimed) return { products: [], unclaimed: true, message: "Real store, not yet claimed by its owner: no product info yet." };
         const products = catalogue.productsFor(p.id).filter((pr) => pr.availability === "in_stock" && pr.price != null);
         state.viewed[p.id] = products.map((pr) => pr.id);
@@ -95,7 +98,7 @@ function makeTools(plots, STREETS = []) {
           tags: pr.tags.map(asData), description: asData(pr.description) })) };
       }
       if (p.status !== "taken") return err("No shop at this plot.");
-      if (p.streetId !== state.enteredStreet || p.position !== state.lastPosition) return err("You must visit_plot this plot first.");
+      if (notVisited(p)) return err("You must visit_plot this plot first.");
       const s = seller(p.sellerId);
       // Imported catalogue if the seller published one, else demo products. Out-of-stock items are never offered (A8).
       const products = catalogue.productsFor(s.id).filter((pr) => pr.availability !== "out_of_stock" && pr.price != null);
@@ -134,7 +137,7 @@ HOW TO WALK
 1. Call list_districts first.
 2. Before walking, send a short plan message (1-2 sentences): which streets you'll walk and what you're looking for.
 3. Walk streets in the fixed map order they were listed. For each street either enter_street it, or skip_street with a reason if it clearly cannot fit the request (e.g. every shop on it sells only bags and the shopper wants a watch). Because street names are just road names, you normally need to enter_street to know what is there. Never skip silently.
-4. On a street, visit TAKEN plots and nominated pins in position order. Empty/auction plots are skipped with no tool call.
+4. On a street, visit TAKEN plots and nominated pins in position order, ONE AT A TIME: visit_plot, then decide (view_products or move on) before visiting the next plot. Empty/auction plots are skipped with no tool call.
 5. For an unclaimed pin, say it is a real store that has not been claimed and move on without product info. At shops and claimed pins, if the category or description could fit, call view_products and check each product. Mark EVERY product that fits; never rank.
 6. Call finish_walk with a short friendly summary. If nothing matched, say what you checked and suggest a looser search.
 
@@ -151,11 +154,11 @@ STYLE
 - Speech-bubble length: match reasons under 20 words, warm and plain. British English, prices in £.
 - Text messages you send between tool calls appear as speech bubbles; keep them to one short sentence.`;
 
-// ---------- Agent loop (xAI / OpenAI-compatible chat completions) ----------
+// ---------- Agent loop (OpenAI chat completions with tool calling) ----------
 async function chat(messages) {
-  const res = await fetch(`${XAI_BASE_URL}/chat/completions`, {
+  const res = await fetch(`${LLM_BASE_URL}/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${XAI_API_KEY}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${LLM_API_KEY}` },
     body: JSON.stringify({ model: MODEL, messages, tools: TOOL_DEFS.map((t) => ({ type: "function", function: t })), tool_choice: "auto", temperature: 0.3 }),
   });
   if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -221,6 +224,41 @@ async function fetchRoads(lat, lng, radius = 500) {
   const roads = chainWays(data.elements, lat, lng);
   roadCache.set(key, { at: Date.now(), roads });
   return roads;
+}
+
+const OSRM_ROUTERS = [
+  "https://routing.openstreetmap.de/routed-foot/route/v1/foot/",
+  "https://router.project-osrm.org/route/v1/foot/",
+];
+const routeCache = new Map();
+async function fetchFootRoute(points) {
+  const key = points.map((point) => `${point.lng.toFixed(4)},${point.lat.toFixed(4)}`).join(";");
+  const hit = routeCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60e3) return hit.result;
+  const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(";");
+  let lastError;
+  for (let i = 0; i < OSRM_ROUTERS.length; i++) {
+    const suffix = i === 0 ? "?overview=full&geometries=geojson&steps=false" : "?overview=full&geometries=geojson";
+    try {
+      const response = await fetch(OSRM_ROUTERS[i] + coordinates + suffix, {
+        headers: { "User-Agent": "PlotMarket/0.1 (demo)", Accept: "application/json" },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!response.ok) throw new Error(`Router returned ${response.status}`);
+      const data = await response.json();
+      const route = data.routes?.[0];
+      if (data.code !== "Ok" || !route?.geometry?.coordinates?.length) throw new Error(data.message || "No walking route found");
+      const result = {
+        path: route.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })),
+        distance_m: route.distance,
+        duration_s: route.duration,
+        legs: (route.legs || []).map((leg) => ({ distance_m: leg.distance, duration_s: leg.duration })),
+      };
+      routeCache.set(key, { at: Date.now(), result });
+      return result;
+    } catch (error) { lastError = error; }
+  }
+  throw lastError || new Error("Walking route unavailable");
 }
 
 // Local metres projection around (lat0, lng0).
@@ -293,6 +331,25 @@ function readJson(req, limit = 64 * 1024) {
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png" };
 
 const server = http.createServer(async (req, res) => {
+  if (req.method === "GET" && req.url.startsWith("/api/route?")) {
+    const response = (status, body) => res.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
+    const raw = new URL(req.url, "http://x").searchParams.get("points") || "";
+    const tuples = raw.split(";");
+    if (tuples.length < 2 || tuples.length > 12) { response(400, { error: "points must contain 2–12 lng,lat pairs." }); return; }
+    const points = [];
+    for (const tuple of tuples) {
+      const parts = tuple.split(",");
+      if (parts.length !== 2 || parts.some((part) => !part.trim())) { response(400, { error: "Each point must be an lng,lat pair." }); return; }
+      const [lng, lat] = parts.map(Number);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        response(400, { error: "Each point must contain finite latitude and longitude coordinates." }); return;
+      }
+      points.push({ lat, lng });
+    }
+    try { response(200, await fetchFootRoute(points)); }
+    catch (error) { response(502, { error: error.message || "Walking route unavailable." }); }
+    return;
+  }
   if (req.method === "GET" && req.url.startsWith("/api/roads?")) {
     const u = new URL(req.url, "http://x"), lat = Number(u.searchParams.get("lat")), lng = Number(u.searchParams.get("lng"));
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) { res.writeHead(400).end("lat and lng required"); return; }
@@ -486,7 +543,7 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log(`Plot Market on http://localhost:${PORT}  (guide: ${GUIDE_LABEL}${GUIDE_MODE === "algorithm" ? ", set GUIDE_MODE=llm + XAI_API_KEY for Grok" : ""})`));
+server.listen(PORT, "0.0.0.0", () => console.log(`Plot Market on http://localhost:${PORT}  (guide: ${GUIDE_LABEL}${GUIDE_MODE === "algorithm" ? ", set GUIDE_MODE=llm + OPENAI_API_KEY for the LLM guide" : ""})`));
 
 function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;

@@ -7,7 +7,7 @@ Shopping plots on the real streets around you, drawn on a live Google map. Selle
 ```bash
 cd plot-market
 cp .env.example .env     # add GOOGLE_MAPS_API_KEY (required for the map).
-                         # the guide is rule-based by default; set GUIDE_MODE=llm + XAI_API_KEY to use Grok.
+                         # the guide is rule-based by default; set GUIDE_MODE=llm + OPENAI_API_KEY to use the OpenAI agent.
 node server.js           # http://localhost:8765
 ```
 
@@ -33,7 +33,7 @@ Geolocation requires `localhost` or HTTPS.
 - `app.js` - rent / 1-per-street / expiry / auction logic, plot modal, "skip 1 month" demo button; `initMarket(streets)` seeds plots once roads are known
 - `livemap.js` - Google Maps view: geolocation, road selection + plot layout along roads, district hulls, avatar overlay, legend
 - `guide.js` - AI guide frontend: SSE client, event queue, avatar, bubbles, glow, route summary
-- `server.js` - static server, `/api/roads` (OpenStreetMap proxy), `/api/guide` (rule-based guide, or Grok tool-calling when `GUIDE_MODE=llm`)
+- `server.js` - static server, `/api/roads` (OpenStreetMap proxy), `/api/guide` (rule-based guide, or OpenAI tool-calling agent when `GUIDE_MODE=llm`; any OpenAI-compatible endpoint via `LLM_BASE_URL`)
 - `guide/mock-agent.js` - rule-based guide (default): keyword/synonym matching, price parsing, same tools as the LLM
 - `import/safe-fetch.js` - SSRF-guarded fetch for seller URLs (http/https only, private/loopback/link-local IPs blocked after DNS, manual redirects, 10 s timeout, 5 MB cap, 1 req/s per host)
 - `import/shopify.js` - import route 1: detects `/products.json`, pages through it, normalises to the shared product shape (title, price, currency, availability, image, link, variants, description, tags, source, lastSynced); capped at 200 products
